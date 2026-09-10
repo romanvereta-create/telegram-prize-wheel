@@ -1,0 +1,60 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Выбор призов</title>
+<script src="https://telegram.org/js/telegram-web-app.js?63"></script><script src="/socket.io/socket.io.js"></script>
+<style>
+*{box-sizing:border-box}html,body{margin:0;background:#eef3fb;font-family:Arial,Segoe UI,sans-serif;color:#172033}.app{max-width:760px;margin:auto;padding:14px 12px 40px}.hero{background:#17233d;color:#fff;border-radius:22px;padding:18px;box-shadow:0 12px 30px #17233d22}.hero h1{margin:3px 0 5px;font-size:28px}.small{font-size:13px;color:#6e7889}.hero .small{color:#cfd8ee}.row{display:flex;justify-content:space-between;gap:10px;align-items:center}.online{font-size:12px;border:1px solid #ffffff22;border-radius:999px;padding:7px 9px;white-space:nowrap}.card{background:#fff;border:1px solid #dfe6f1;border-radius:18px;padding:14px;margin-top:12px;box-shadow:0 8px 24px #17233d0c}.stage{font-weight:900;font-size:21px}.wheelwrap{width:min(82vw,500px);aspect-ratio:1;margin:12px auto;position:relative}.wheel{width:100%;height:100%;border-radius:50%;display:block;filter:drop-shadow(0 12px 14px #17233d22);transition:transform 5.2s cubic-bezier(.12,.72,.16,1)}.pointer{position:absolute;top:-4px;left:50%;transform:translateX(-50%);z-index:3;width:0;height:0;border-left:17px solid transparent;border-right:17px solid transparent;border-bottom:36px solid #17233d}.dot{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:48px;height:48px;border-radius:50%;background:#fff;border:8px solid #17233d;z-index:2}.result{text-align:center;min-height:52px}.result b{font-size:23px}.people{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.person{background:#f7f9fc;border:1px solid #e3e8f2;border-radius:11px;padding:8px 9px;display:flex;justify-content:space-between;font-size:13px}.person.off{opacity:.38}.t{font-weight:900;color:#3154a5}button{border:0;border-radius:12px;padding:11px 13px;font-weight:800;font-size:14px;cursor:pointer}.primary{background:#315ed3;color:#fff;width:100%;margin-top:10px}.secondary{background:#edf2ff;color:#294c9b}.danger{background:#fff0f0;color:#a42e2e}.login{display:flex;gap:7px;margin-top:9px}input{width:100%;border:1px solid #d8e0ec;border-radius:10px;padding:10px;font:inherit}.adminOnly{display:none}.admin .adminOnly{display:block}.editor{display:grid;grid-template-columns:1fr 78px;gap:6px;margin:7px 0}.buttons{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.history div{padding:7px 0;border-bottom:1px solid #edf0f5;display:flex;justify-content:space-between;gap:10px}.err{background:#fff0f0;border:1px solid #efcccc;color:#8a2929;padding:10px;border-radius:11px;margin-top:10px;display:none}.footer{text-align:center;color:#7c8595;font-size:11px;margin-top:13px}@media(min-width:650px){.people{grid-template-columns:repeat(3,1fr)}}
+</style></head><body><div class="app" id="app">
+<div class="hero"><div class="row"><div><div class="small">ОГЭ · ПРИЗЫ ЗА ЗВЁЗДЫ</div><h1>Колесо выбора 🎁</h1><div class="small">Один запуск — один общий результат для всей группы</div></div><div class="online" id="online">● подключение</div></div></div>
+<div class="err" id="err"></div>
+<div class="card"><div class="row"><div><div class="small">Текущий уровень</div><div class="stage" id="stage">Загрузка…</div></div><div class="t" id="remain">—</div></div>
+<div class="wheelwrap"><div class="pointer"></div><canvas id="wheel" class="wheel" width="760" height="760"></canvas><div class="dot"></div></div>
+<div class="result" id="result"><b>Готовимся</b><div class="small" id="turnHint">Преподаватель назначит, кто крутит.</div></div><div class="people" id="people"></div><button class="primary" id="spin">🎡 Крутить колесо</button></div>
+<div class="card"><b>Результаты месяца</b><div class="history" id="history"><div class="small">Пока пусто</div></div></div>
+<div class="card" id="loginCard"><b>Управление преподавателя</b><div class="small">Участники только смотрят. Запускать выбор и менять звёзды можешь только ты.</div><div class="login"><input id="pin" type="password" placeholder="PIN"><button class="secondary" id="login">Войти</button></div></div>
+<div class="card adminOnly"><b>Настройка</b>
+<div class="small" style="margin-top:8px">Кто крутит следующий этап</div>
+<div class="buttons" id="onlineUsers"><span class="small">Ждём подключения участников…</span></div>
+<div id="editors"></div><div class="buttons"><button class="secondary" id="save">Сохранить</button><button class="secondary" id="reset">Повторить выбор</button><button class="danger" id="month">Новый месяц</button></div></div>
+<div class="footer">Без ставок. Звёзды только увеличивают шанс.</div></div>
+<script>
+(()=>{const tg=window.Telegram?.WebApp;try{tg?.ready();tg?.expand();tg?.setHeaderColor('#17233d')}catch{}const socket=io({auth:{initData:tg?.initData||'',demoRoom:new URLSearchParams(location.search).get('room')||'main'}});const $=id=>document.getElementById(id),app=$('app'),canvas=$('wheel'),ctx=canvas.getContext('2d');let state=null,admin=false,anim=false,canSpin=false,onlineUsers=[];const colors=['#4e77e7','#ef9a4a','#5fb889','#a978dc','#e45f79','#51a9c9'];function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}function active(){return state?.students?.filter(s=>s.active)||[]}function tk(s){return Math.max(0,Number(s.stars||0))}function error(m){$('err').textContent=m;$('err').style.display='block';setTimeout(()=>$('err').style.display='none',5000)}function draw(list){ctx.clearRect(0,0,760,760);if(!list.length)return;const rawTotal=list.reduce((a,s)=>a+tk(s),0);
+const equalFallback=rawTotal<=0;
+const total=equalFallback?list.length:rawTotal;
+let a=-Math.PI/2;
+list.forEach((s,i)=>{const weight=equalFallback?1:tk(s);const sp=Math.PI*2*weight/total;ctx.beginPath();ctx.moveTo(380,380);ctx.arc(380,380,355,a,a+sp);ctx.closePath();ctx.fillStyle=colors[(Number(s.id.replace(/\D/g,''))-1)%6];ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=5;ctx.stroke();const m=a+sp/2;ctx.save();ctx.translate(380,380);ctx.rotate(m);ctx.textAlign='right';ctx.fillStyle='#fff';ctx.font='700 30px Arial';ctx.fillText(s.name,315,-12);ctx.font='700 20px Arial';ctx.fillText((equalFallback?1:tk(s))+' шанс.',315,18);ctx.restore();a+=sp});ctx.beginPath();ctx.arc(380,380,355,0,Math.PI*2);ctx.strokeStyle='#17233d';ctx.lineWidth=8;ctx.stroke()}function render(){if(!state)return;const list=active();$('stage').textContent=state.completed?'🎉 Всё распределено':(list.length===2?'🎁 Финал: бонус A / B':state.levels[state.level]);$('remain').textContent=list.length+' участн.';
+const turnName=state.allowedSpinnerName;
+if(state.completed){
+  $('spin').disabled=true;
+  $('spin').textContent='Розыгрыш завершён';
+}else if(canSpin){
+  $('spin').disabled=!!state.spinning;
+  $('spin').textContent='🎡 Крутить колесо';
+}else{
+  $('spin').disabled=true;
+  $('spin').textContent=turnName ? `Ждём: ${turnName}` : 'Ждём назначения хода';
+}
+if(!state.spinning && !anim && $('turnHint')){
+  $('turnHint').textContent=canSpin ? 'Твой ход — можно крутить.' : (turnName ? `Сейчас крутит ${turnName}.` : 'Преподаватель назначит, кто крутит.');
+}
+$('people').innerHTML=state.students.map(s=>`<div class="person ${s.active?'':'off'}"><div><b>${esc(s.name)}</b><div>${s.stars} ⭐</div></div><div class="t">${tk(s)} шанс.</div></div>`).join('');$('history').innerHTML=state.history.length?state.history.map(h=>`<div><span>${esc(state.levels[h.level])}</span><b>${esc(h.name)}</b></div>`).join(''):'<div class="small">Пока пусто</div>';if(!anim){canvas.style.transition='none';canvas.style.transform='rotate(0deg)';draw(list)}if(admin){$('editors').innerHTML=state.students.map((s,i)=>`<div class="editor"><input class="nm" data-i="${i}" value="${esc(s.name)}"><input class="st" data-i="${i}" type="number" min="0" max="100" value="${s.stars}"></div>`).join('')}}socket.on('connect',()=>{$('online').textContent='● онлайн'});socket.on('connect_error',e=>{error(e.message);$('online').textContent='● нет связи'});socket.on('presence',d=>$('online').textContent='● онлайн: '+d.count);socket.on('spin-permission',d=>{canSpin=!!d.canSpin;render()});
+socket.on('online-users',list=>{
+  onlineUsers=Array.isArray(list)?list:[];
+  const box=$('onlineUsers');
+  if(!box)return;
+  box.innerHTML=onlineUsers.length
+    ? onlineUsers.map(u=>`<button class="secondary turnBtn" data-user="${esc(u.userId)}">${esc(u.name)}</button>`).join('')
+    : '<span class="small">Никто ещё не подключён</span>';
+  box.querySelectorAll('.turnBtn').forEach(btn=>{
+    btn.onclick=()=>socket.emit('set-spinner',{userId:btn.dataset.user},r=>{
+      if(!r.ok)return error(r.error);
+      $('result').innerHTML=`<b>Ход передан</b><div class="small">Следующим крутит ${esc(r.name)}</div>`;
+    });
+  });
+});
+socket.on('state',s=>{state=s;render()});socket.on('admin',()=>{admin=true;app.classList.add('admin');$('loginCard').style.display='none';render()});$('login').onclick=()=>socket.emit('admin-login',$('pin').value,r=>{if(!r.ok)error(r.error)});$('pin').addEventListener('keydown',e=>{if(e.key==='Enter')$('login').click()});$('save').onclick=()=>{const ns=[...document.querySelectorAll('.nm')],ss=[...document.querySelectorAll('.st')];socket.emit('save',{students:ns.map((n,i)=>({name:n.value,stars:Number(ss[i].value)}))},r=>{if(!r.ok)error(r.error)})};$('spin').onclick=()=>{
+  $('spin').disabled=true;
+  socket.emit('spin',{},r=>{
+    if(!r.ok){ render(); error(r.error); } else { canSpin=false; }
+  })
+};$('reset').onclick=()=>{if(confirm('Вернуть всех и повторить распределение с теми же звёздами?'))socket.emit('reset',{},r=>{if(!r.ok)error(r.error)})};$('month').onclick=()=>{if(confirm('Начать новый месяц и обнулить звёзды?'))socket.emit('new-month',{},r=>{if(!r.ok)error(r.error)})};socket.on('spin-start',d=>{anim=true;const list=active();canvas.style.transition='none';canvas.style.transform='rotate(0deg)';draw(list);void canvas.offsetWidth;const winnerIndex=list.findIndex(s=>s.id===d.winnerId);const total=list.reduce((a,s)=>a+tk(s),0);let start=0;for(let i=0;i<winnerIndex;i++)start+=360*tk(list[i])/total;const span=360*tk(list[winnerIndex])/total;const point=start+span/2;const deg=360*7-point;canvas.style.transition=`transform ${d.duration}ms cubic-bezier(.12,.72,.16,1)`;canvas.style.transform=`rotate(${deg}deg)`;canSpin=false;$('spin').disabled=true;
+$('result').innerHTML=`<b>🎡 Крутит: ${esc(d.spinnerName||'участник')}</b><div class="small">У всех открыт один и тот же запуск</div>`});socket.on('spin-result',d=>{anim=false;canSpin=false;$('spin').disabled=true;$('result').innerHTML=d.final?`<b>🎉 ${esc(d.winner)}</b><div class="small">Бонус A · ${esc(d.finalOther)} получает бонус B</div>`:`<b>🎉 ${esc(d.winner)}</b><div class="small">Получает этот уровень</div>`;setTimeout(render,120)});})();
+</script></body></html>

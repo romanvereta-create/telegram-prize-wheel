@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: telegram-prize-wheel
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_PIN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: DEMO_MODE
+        value: "false"
