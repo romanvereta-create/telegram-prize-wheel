@@ -208,6 +208,6 @@ io.on('connection',socket=>{
   },80));
 });
 
-app.use(express.static('public'));
+app.use(express.static('.'));
 app.get('/health',(req,res)=>res.json({ok:true,rooms:rooms.size}));
 server.listen(PORT,'0.0.0.0',()=>console.log(`Listening on ${PORT}`));
