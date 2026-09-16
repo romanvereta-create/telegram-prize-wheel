@@ -14,7 +14,7 @@
 <div class="app" id="app">
   <section class="hero">
     <div class="row"><div><div class="small">ОГЭ · призы за звёзды</div><h1>Личный выбор приза 🎁</h1></div><div class="online" id="online">● подключение…</div></div>
-    <div class="small">Каждый ученик крутит только за свой приз. Итоговое распределение рассчитывается по накопленным звёздам.</div>
+    <div class="small">Каждый ученик крутит только за свой приз. Очередь идёт автоматически — от большего количества звёзд к меньшему.</div>
   </section>
 
   <div class="err" id="err"></div>
@@ -27,7 +27,7 @@
   </section>
 
   <section class="card">
-    <div class="row"><div><div class="small">Сейчас крутит</div><div class="stage" id="stage">Ждём преподавателя</div></div><div class="small" id="lockState">Распределение не зафиксировано</div></div>
+    <div class="row"><div><div class="small">Сейчас крутит</div><div class="stage" id="stage">Очередь ещё не определена</div></div><div class="small" id="lockState">Распределение не зафиксировано</div></div>
     <div class="wheelWrap">
       <div class="pointer"></div><canvas id="wheel" width="760" height="760"></canvas><div class="centerDot"></div>
     </div>
@@ -38,7 +38,7 @@
 
   <section class="card">
     <h2>Звёзды и стартовый шанс на Суперприз</h2>
-    <div class="notice"><span class="formula">шанс = звёзды ученика / все звёзды группы</span><div class="small" style="margin-top:5px">После назначения Суперприза его обладатель исключается, и для Большого приза доли автоматически пересчитываются среди оставшихся. Так продолжается до шестого приза.</div></div>
+    <div class="notice"><span class="formula">вес = звёзды − минимум + 5</span><div class="small" style="margin-top:5px">Шанс = вес ученика / сумма весов. После назначения Суперприза его обладатель исключается; для следующего приза минимум, веса и доли автоматически пересчитываются среди оставшихся.</div></div>
     <div class="people" id="people" style="margin-top:10px"></div>
   </section>
 
@@ -60,9 +60,8 @@
   </section>
 
   <section class="card adminOnly">
-    <h2>2. Кто крутит сейчас</h2>
-    <div class="small">Порядок не меняет уже рассчитанный результат. Можно идти по количеству звёзд — кнопки ниже отсортированы именно так.</div>
-    <div class="buttons" id="turnButtons" style="margin-top:10px"></div>
+    <h2>2. Очередь вращений</h2>
+    <div class="notice good">Очередь назначается автоматически: <b>сначала ученик с большим количеством звёзд</b>, затем следующий. При равенстве звёзд — исходный порядок списка.</div>
   </section>
 
   <section class="card adminOnly">
@@ -76,7 +75,7 @@
     <div class="buttons"><button class="secondary" id="resetDistribution">Пересчитать распределение</button><button class="danger" id="newMonth">Новый месяц</button></div>
   </section>
 
-  <div class="footer">1 звезда = 1 вес. Никаких базовых +7.</div>
+  <div class="footer">Вес = звёзды − минимум среди участников + 5. После каждого приза веса пересчитываются среди оставшихся.</div>
 </div>
 
 <script>
@@ -143,7 +142,7 @@
   function render(){
     if(!state)return;
     const current=state.students.find(s=>s.id===state.currentStudentId);
-    $('stage').textContent=state.completed?'🎉 Все призы открыты':(current?current.name:'Ждём преподавателя');
+    $('stage').textContent=state.completed?'🎉 Все призы открыты':(current?current.name:'Очередь ещё не определена');
     $('lockState').textContent=state.distributionLocked?'🔒 распределение зафиксировано':'распределение не зафиксировано';
 
     if(state.completed){
@@ -155,7 +154,7 @@
       if(!personal.studentId) $('spin').textContent='Сначала выбери своё имя';
       else if(!state.distributionLocked) $('spin').textContent='Ждём фиксации распределения';
       else if(current) $('spin').textContent=`Ждём: ${current.name}`;
-      else $('spin').textContent='Ждём назначения хода';
+      else $('spin').textContent='Ждём очереди';
     }
 
     $('people').innerHTML=state.students.map(s=>`<div class="person ${s.revealed?'revealed':''}"><div><b>${esc(s.name)}</b><div class="small">${s.stars} ⭐${s.bound?' · подключён':''}</div></div><div class="pct">${fmtPct(s.superChance)}</div></div>`).join('');
@@ -173,14 +172,6 @@
       $('saveStars').disabled=state.distributionLocked||state.spinning;
       $('lockDistribution').disabled=state.distributionLocked||state.spinning;
       $('lockDistribution').textContent=state.distributionLocked?'✓ Распределение зафиксировано':'Зафиксировать распределение';
-
-      const candidates=[...state.students].filter(s=>!s.revealed).sort((a,b)=>b.stars-a.stars);
-      $('turnButtons').innerHTML=candidates.length
-        ? candidates.map(s=>`<button class="studentBtn ${state.currentStudentId===s.id?'current':''}" data-student="${s.id}" ${(!state.distributionLocked||!s.bound||state.spinning)?'disabled':''}>${esc(s.name)} · ${s.stars}⭐${s.bound?'':' · не подключён'}</button>`).join('')
-        : '<span class="small">Все уже открыли призы</span>';
-      $('turnButtons').querySelectorAll('.studentBtn:not([disabled])').forEach(btn=>btn.onclick=()=>{
-        socket.emit('set-current-student',{studentId:btn.dataset.student},r=>{if(!r.ok)return error(r.error);$('result').innerHTML=`<div class="small">Ход передан</div><div class="big">${esc(r.name)}</div>`});
-      });
 
       $('bindings').innerHTML=state.students.map(s=>`<div class="bind"><b>${esc(s.name)}</b><div class="small">${s.bound?(esc(s.boundName)||'Telegram-аккаунт'):'ещё не выбрал(а) себя'}</div></div>`).join('');
     }
@@ -204,7 +195,7 @@
 
   $('lockDistribution').onclick=()=>{
     if(!confirm('Зафиксировать скрытое распределение призов по текущим звёздам? После этого звёзды нельзя менять без пересчёта.'))return;
-    socket.emit('lock-distribution',{},r=>{if(!r.ok)return error(r.error);$('result').innerHTML='<div class="small">🔒 Распределение рассчитано и скрыто до вращений</div>'});
+    socket.emit('lock-distribution',{},r=>{if(!r.ok)return error(r.error);$('result').innerHTML='<div class="small">🔒 Распределение рассчитано. Очередь запущена автоматически</div>'});
   };
 
   $('spin').onclick=()=>{

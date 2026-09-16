@@ -57,10 +57,17 @@ function totalStars(r) {
   return r.students.reduce((sum, s) => sum + safeStars(s.stars), 0);
 }
 
+const WEIGHT_BASE = 5;
+
+function weightedValue(s, candidates) {
+  const minStars = Math.min(...candidates.map(x => safeStars(x.stars)));
+  return safeStars(s.stars) - minStars + WEIGHT_BASE;
+}
+
 function initialSuperChance(r, s) {
-  const total = totalStars(r);
-  if (total <= 0) return 100 / r.students.length;
-  return safeStars(s.stars) * 100 / total;
+  const candidates = r.students;
+  const totalWeight = candidates.reduce((sum, x) => sum + weightedValue(x, candidates), 0);
+  return weightedValue(s, candidates) * 100 / totalWeight;
 }
 
 function publicState(r) {
@@ -124,19 +131,27 @@ function verifyTelegram(initData) {
 }
 
 function chooseWeightedStudent(candidates) {
-  const total = candidates.reduce((sum, s) => sum + safeStars(s.stars), 0);
-  if (total <= 0) return candidates[crypto.randomInt(candidates.length)];
+  const weights = candidates.map(s => weightedValue(s, candidates));
+  const total = weights.reduce((sum, w) => sum + w, 0);
 
   let x = crypto.randomInt(total);
-  for (const s of candidates) {
-    x -= safeStars(s.stars);
-    if (x < 0) return s;
+  for (let i = 0; i < candidates.length; i += 1) {
+    x -= weights[i];
+    if (x < 0) return candidates[i];
   }
   return candidates[candidates.length - 1];
 }
 
-// Призы распределяются в порядке ценности. Для каждого уровня вероятность ученика:
-// stars_i / sum(stars remaining). Победитель уровня исключается из следующих уровней.
+// Призы распределяются в порядке ценности. На каждом уровне:
+// weight_i = stars_i - minStarsAmongRemaining + 5.
+// Победитель уровня исключается, минимум и веса пересчитываются среди оставшихся.
+function nextStudentByStars(r) {
+  return r.students
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => !s.revealed)
+    .sort((a, b) => safeStars(b.s.stars) - safeStars(a.s.stars) || a.i - b.i)[0]?.s || null;
+}
+
 function lockDistribution(r) {
   if (r.distributionLocked) return;
   const remaining = [...r.students];
@@ -148,6 +163,9 @@ function lockDistribution(r) {
   }
 
   r.distributionLocked = true;
+  // Порядок вращений автоматический: сначала больше звёзд, затем меньше.
+  // При равенстве звёзд сохраняется исходный порядок списка.
+  r.currentStudentId = nextStudentByStars(r)?.id || null;
 }
 
 function studentForUser(r, userId) {
@@ -325,7 +343,7 @@ io.on('connection', socket => {
     if (mine.revealed) return cb({ ok: false, error: 'Ты уже открыл(а) свой приз' });
     if (r.currentStudentId !== mine.id) {
       const current = r.students.find(s => s.id === r.currentStudentId);
-      return cb({ ok: false, error: current ? `Сейчас крутит ${current.name}` : 'Преподаватель ещё не назначил, кто крутит' });
+      return cb({ ok: false, error: current ? `Сейчас крутит ${current.name}` : 'Очередь ещё не определена' });
     }
     if (mine.prizeIndex == null) return cb({ ok: false, error: 'Внутренняя ошибка распределения' });
 
@@ -343,9 +361,9 @@ io.on('connection', socket => {
     setTimeout(() => {
       mine.revealed = true;
       r.history.push({ studentId: mine.id, name: mine.name, prizeIndex: mine.prizeIndex });
-      r.currentStudentId = null;
       r.spinning = false;
       r.completed = r.students.every(s => s.revealed);
+      r.currentStudentId = r.completed ? null : (nextStudentByStars(r)?.id || null);
 
       io.to(roomId).emit('spin-result', {
         studentId: mine.id,
