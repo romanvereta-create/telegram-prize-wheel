@@ -1,18 +1,20 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const crypto = require('crypto');
 const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const ADMIN_PIN = String(process.env.ADMIN_PIN || '');
 const DEMO_MODE = String(process.env.DEMO_MODE || 'false').toLowerCase() === 'true';
 
-const NAMES = ['София','Вика','Саша','Яромир','Мария','Матвей'];
-const LEVELS = [
+const NAMES = ['София', 'Вика', 'Саша', 'Яромир', 'Мария', 'Матвей'];
+const PRIZES = [
   '🥇 Суперприз',
   '🥈 Большой приз',
   '🥉 Средний приз',
@@ -20,194 +22,399 @@ const LEVELS = [
   '🎁 Финальный бонус A',
   '🎉 Финальный бонус B'
 ];
+
 const rooms = new Map();
 
-function freshRoom(){
+function freshRoom() {
   return {
-    students: NAMES.map((name,i)=>({id:`s${i+1}`,name,stars:0,active:true})),
-    level: 0,
-    history: [],
+    students: NAMES.map((name, i) => ({
+      id: `s${i + 1}`,
+      name,
+      stars: 0,
+      boundUserId: null,
+      boundUserName: null,
+      prizeIndex: null,      // скрыто до вращения
+      revealed: false
+    })),
+    distributionLocked: false,
+    currentStudentId: null,
     spinning: false,
-    completed: false,
-    allowedSpinnerUserId: null,
-    allowedSpinnerName: null
+    history: [],
+    completed: false
   };
-}
-function getRoom(id){ if(!rooms.has(id)) rooms.set(id,freshRoom()); return rooms.get(id); }
-function publicState(r){
-  return {
-students:r.students, level:r.level, levels:LEVELS,
-    history:r.history, spinning:r.spinning, completed:r.completed,
-    allowedSpinnerName:r.allowedSpinnerName
-  };
-}
-function tickets(r,s){ return Math.max(0, Number(s.stars||0)); }
-function active(r){ return r.students.filter(s=>s.active); }
-function chooseWeighted(r,list){
-  const total=list.reduce((sum,s)=>sum+tickets(r,s),0);
-  if(total<=0) return list[crypto.randomInt(list.length)];
-  let x=crypto.randomInt(total);
-  for(const s of list){ x-=tickets(r,s); if(x<0) return s; }
-  return list[list.length-1];
-}
-function verifyTelegram(initData){
-  if(!BOT_TOKEN) throw new Error('BOT_TOKEN не задан на сервере');
-  const p=new URLSearchParams(initData||'');
-  const hash=p.get('hash');
-  if(!hash) throw new Error('Нет подписи Telegram');
-  p.delete('hash');
-  const check=[...p.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${k}=${v}`).join('\n');
-  const secret=crypto.createHmac('sha256','WebAppData').update(BOT_TOKEN).digest();
-  const calc=crypto.createHmac('sha256',secret).update(check).digest('hex');
-  const a=Buffer.from(calc,'hex'), b=Buffer.from(hash,'hex');
-  if(a.length!==b.length || !crypto.timingSafeEqual(a,b)) throw new Error('Подпись Telegram не прошла проверку');
-  const authDate=Number(p.get('auth_date')||0);
-  if(!authDate || Math.abs(Math.floor(Date.now()/1000)-authDate)>86400) throw new Error('Открой приложение из Telegram заново');
-  const chatInstance=p.get('chat_instance');
-  if(!chatInstance) throw new Error('Открой Mini App именно из общей группы Telegram');
-  let user=null;
-  try{ user=JSON.parse(p.get('user')||'null'); }catch{}
-  return {roomId:`tg:${chatInstance}`,user};
-}
-function displayName(u){
-  if(!u) return 'Участник';
-  return [u.first_name,u.last_name].filter(Boolean).join(' ').trim() || u.username || 'Участник';
-}
-async function emitTurnPermissions(roomId){
-  const r=getRoom(roomId);
-  const sockets=await io.in(roomId).fetchSockets();
-  for(const sk of sockets){
-    const uid=String(sk.data.user?.id ?? '');
-    const canSpin=!!sk.data.admin || (!!r.allowedSpinnerUserId && uid===String(r.allowedSpinnerUserId));
-    sk.emit('spin-permission',{canSpin,allowedSpinnerName:r.allowedSpinnerName});
-  }
-}
-async function emitOnlineUsers(roomId){
-  const sockets=await io.in(roomId).fetchSockets();
-  const seen=new Map();
-  for(const sk of sockets){
-    const u=sk.data.user||{};
-    const uid=String(u.id ?? sk.id);
-    if(!seen.has(uid)) seen.set(uid,{userId:uid,name:displayName(u),username:u.username||''});
-  }
-  const list=[...seen.values()];
-  for(const sk of sockets){
-    if(sk.data.admin) sk.emit('online-users',list);
-  }
-}
-function emitState(roomId){
-  io.to(roomId).emit('state',publicState(getRoom(roomId)));
-  emitTurnPermissions(roomId);
-  emitOnlineUsers(roomId);
 }
 
-io.use((socket,next)=>{
-  try{
-    const initData=socket.handshake.auth?.initData||'';
-    if(DEMO_MODE && !initData){
-      socket.data.roomId=`demo:${socket.handshake.auth?.demoRoom||'main'}`;
-      socket.data.user={id:`demo-${crypto.randomUUID()}`,first_name:'Участник'};
+function getRoom(id) {
+  if (!rooms.has(id)) rooms.set(id, freshRoom());
+  return rooms.get(id);
+}
+
+function safeStars(v) {
+  return Math.max(0, Math.min(999, Math.floor(Number(v) || 0)));
+}
+
+function totalStars(r) {
+  return r.students.reduce((sum, s) => sum + safeStars(s.stars), 0);
+}
+
+function initialSuperChance(r, s) {
+  const total = totalStars(r);
+  if (total <= 0) return 100 / r.students.length;
+  return safeStars(s.stars) * 100 / total;
+}
+
+function publicState(r) {
+  const current = r.students.find(s => s.id === r.currentStudentId) || null;
+  return {
+    prizes: PRIZES,
+    students: r.students.map(s => ({
+      id: s.id,
+      name: s.name,
+      stars: safeStars(s.stars),
+      bound: !!s.boundUserId,
+      boundName: s.boundUserName || '',
+      revealed: !!s.revealed,
+      revealedPrizeIndex: s.revealed ? s.prizeIndex : null,
+      superChance: initialSuperChance(r, s)
+    })),
+    totalStars: totalStars(r),
+    distributionLocked: r.distributionLocked,
+    currentStudentId: r.currentStudentId,
+    currentStudentName: current?.name || null,
+    spinning: r.spinning,
+    history: r.history,
+    completed: r.completed
+  };
+}
+
+function displayName(u) {
+  if (!u) return 'Участник';
+  return [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || u.username || 'Участник';
+}
+
+function verifyTelegram(initData) {
+  if (!BOT_TOKEN) throw new Error('BOT_TOKEN не задан на сервере');
+  const p = new URLSearchParams(initData || '');
+  const hash = p.get('hash');
+  if (!hash) throw new Error('Нет подписи Telegram');
+  p.delete('hash');
+
+  const check = [...p.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}=${v}`)
+    .join('\n');
+
+  const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+  const calc = crypto.createHmac('sha256', secret).update(check).digest('hex');
+  const a = Buffer.from(calc, 'hex');
+  const b = Buffer.from(hash, 'hex');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) throw new Error('Подпись Telegram не прошла проверку');
+
+  const authDate = Number(p.get('auth_date') || 0);
+  if (!authDate || Math.abs(Math.floor(Date.now() / 1000) - authDate) > 86400) {
+    throw new Error('Открой приложение из Telegram заново');
+  }
+
+  const chatInstance = p.get('chat_instance');
+  if (!chatInstance) throw new Error('Открой Mini App именно из общей группы Telegram');
+
+  let user = null;
+  try { user = JSON.parse(p.get('user') || 'null'); } catch {}
+  return { roomId: `tg:${chatInstance}`, user };
+}
+
+function chooseWeightedStudent(candidates) {
+  const total = candidates.reduce((sum, s) => sum + safeStars(s.stars), 0);
+  if (total <= 0) return candidates[crypto.randomInt(candidates.length)];
+
+  let x = crypto.randomInt(total);
+  for (const s of candidates) {
+    x -= safeStars(s.stars);
+    if (x < 0) return s;
+  }
+  return candidates[candidates.length - 1];
+}
+
+// Призы распределяются в порядке ценности. Для каждого уровня вероятность ученика:
+// stars_i / sum(stars remaining). Победитель уровня исключается из следующих уровней.
+function lockDistribution(r) {
+  if (r.distributionLocked) return;
+  const remaining = [...r.students];
+
+  for (let prizeIndex = 0; prizeIndex < PRIZES.length; prizeIndex += 1) {
+    const winner = chooseWeightedStudent(remaining);
+    winner.prizeIndex = prizeIndex;
+    remaining.splice(remaining.findIndex(s => s.id === winner.id), 1);
+  }
+
+  r.distributionLocked = true;
+}
+
+function studentForUser(r, userId) {
+  const uid = String(userId ?? '');
+  return r.students.find(s => s.boundUserId && String(s.boundUserId) === uid) || null;
+}
+
+async function emitPersonal(roomId) {
+  const r = getRoom(roomId);
+  const sockets = await io.in(roomId).fetchSockets();
+  for (const sk of sockets) {
+    const uid = String(sk.data.user?.id ?? '');
+    const mine = studentForUser(r, uid);
+    const canSpin = !!mine &&
+      r.distributionLocked &&
+      !r.completed &&
+      !r.spinning &&
+      r.currentStudentId === mine.id &&
+      !mine.revealed;
+
+    sk.emit('personal', {
+      admin: !!sk.data.admin,
+      userName: displayName(sk.data.user),
+      studentId: mine?.id || null,
+      studentName: mine?.name || null,
+      canSpin
+    });
+  }
+}
+
+async function emitAdminOnline(roomId) {
+  const r = getRoom(roomId);
+  const sockets = await io.in(roomId).fetchSockets();
+  const seen = new Map();
+
+  for (const sk of sockets) {
+    const u = sk.data.user || {};
+    const uid = String(u.id ?? sk.id);
+    if (!seen.has(uid)) {
+      const mine = studentForUser(r, uid);
+      seen.set(uid, {
+        userId: uid,
+        name: displayName(u),
+        username: u.username || '',
+        studentId: mine?.id || null,
+        studentName: mine?.name || null
+      });
+    }
+  }
+
+  const list = [...seen.values()];
+  for (const sk of sockets) {
+    if (sk.data.admin) sk.emit('online-users', list);
+  }
+}
+
+function emitState(roomId) {
+  io.to(roomId).emit('state', publicState(getRoom(roomId)));
+  emitPersonal(roomId);
+  emitAdminOnline(roomId);
+}
+
+io.use((socket, next) => {
+  try {
+    const initData = socket.handshake.auth?.initData || '';
+    if (DEMO_MODE && !initData) {
+      const demoId = socket.handshake.auth?.demoUser || `demo-${crypto.randomUUID()}`;
+      socket.data.roomId = `demo:${socket.handshake.auth?.demoRoom || 'main'}`;
+      socket.data.user = { id: demoId, first_name: socket.handshake.auth?.demoName || 'Участник' };
       return next();
     }
-    const verified=verifyTelegram(initData);
-    socket.data.roomId=verified.roomId;
-    socket.data.user=verified.user;
+
+    const verified = verifyTelegram(initData);
+    socket.data.roomId = verified.roomId;
+    socket.data.user = verified.user;
     next();
-  }catch(e){ next(new Error(e.message)); }
+  } catch (e) {
+    next(new Error(e.message));
+  }
 });
 
-io.on('connection',socket=>{
-  const roomId=socket.data.roomId;
-  if(socket.data.user && socket.data.user.id==null) socket.data.user.id=`anon-${socket.id}`;
+io.on('connection', socket => {
+  const roomId = socket.data.roomId;
+  if (socket.data.user && socket.data.user.id == null) socket.data.user.id = `anon-${socket.id}`;
+  socket.data.admin = false;
   socket.join(roomId);
-  socket.data.admin=false;
+
   emitState(roomId);
-  io.to(roomId).emit('presence',{count:io.sockets.adapter.rooms.get(roomId)?.size||1});
+  io.to(roomId).emit('presence', { count: io.sockets.adapter.rooms.get(roomId)?.size || 1 });
 
-  socket.on('admin-login',(pin,cb=()=>{})=>{
-    if(!ADMIN_PIN || String(pin)!==ADMIN_PIN) return cb({ok:false,error:'Неверный PIN'});
-    socket.data.admin=true; cb({ok:true}); socket.emit('admin',{ok:true}); emitTurnPermissions(roomId); emitOnlineUsers(roomId);
+  socket.on('admin-login', (pin, cb = () => {}) => {
+    if (!ADMIN_PIN || String(pin) !== ADMIN_PIN) return cb({ ok: false, error: 'Неверный PIN' });
+    socket.data.admin = true;
+    cb({ ok: true });
+    socket.emit('admin', { ok: true });
+    emitPersonal(roomId);
+    emitAdminOnline(roomId);
   });
 
-  socket.on('save',(payload,cb=()=>{})=>{
-    if(!socket.data.admin) return cb({ok:false,error:'Только преподаватель'});
-    const r=getRoom(roomId); if(r.spinning) return cb({ok:false,error:'Сейчас идёт выбор'});
-    if(!Array.isArray(payload.students)||payload.students.length!==6) return cb({ok:false,error:'Нужно 6 участников'});
-    r.students=r.students.map((old,i)=>({
-      ...old,
-      name:String(payload.students[i].name||old.name).trim().slice(0,24)||old.name,
-      stars:Math.max(0,Math.min(100,Number(payload.students[i].stars)||0))
-    }));
-    emitState(roomId); cb({ok:true});
+  socket.on('claim-student', (payload, cb = () => {}) => {
+    const r = getRoom(roomId);
+    if (r.spinning) return cb({ ok: false, error: 'Сейчас идёт вращение' });
+
+    const uid = String(socket.data.user?.id ?? '');
+    if (!uid) return cb({ ok: false, error: 'Не удалось определить Telegram-аккаунт' });
+
+    const existing = studentForUser(r, uid);
+    if (existing) return cb({ ok: true, studentId: existing.id, studentName: existing.name });
+
+    const s = r.students.find(x => x.id === String(payload?.studentId || ''));
+    if (!s) return cb({ ok: false, error: 'Ученик не найден' });
+    if (s.boundUserId) return cb({ ok: false, error: `${s.name} уже выбрал(а) себя` });
+
+    s.boundUserId = uid;
+    s.boundUserName = displayName(socket.data.user);
+    emitState(roomId);
+    cb({ ok: true, studentId: s.id, studentName: s.name });
   });
 
-  socket.on('set-spinner',(payload,cb=()=>{})=>{
-    if(!socket.data.admin) return cb({ok:false,error:'Только преподаватель'});
-    const r=getRoom(roomId);
-    if(r.spinning) return cb({ok:false,error:'Сейчас колесо вращается'});
-    if(r.completed) return cb({ok:false,error:'Месяц уже завершён'});
-    const userId=String(payload?.userId||'');
-    if(!userId) return cb({ok:false,error:'Выбери участника'});
-    io.in(roomId).fetchSockets().then(sockets=>{
-      const target=sockets.find(sk=>String(sk.data.user?.id ?? '')===userId);
-      if(!target) return cb({ok:false,error:'Этот участник сейчас не подключён'});
-      r.allowedSpinnerUserId=userId;
-      r.allowedSpinnerName=displayName(target.data.user);
+  socket.on('save-stars', (payload, cb = () => {}) => {
+    if (!socket.data.admin) return cb({ ok: false, error: 'Только преподаватель' });
+    const r = getRoom(roomId);
+    if (r.spinning) return cb({ ok: false, error: 'Сейчас идёт вращение' });
+    if (r.distributionLocked) return cb({ ok: false, error: 'Распределение уже зафиксировано. Сначала нажми «Пересчитать распределение».' });
+    if (!Array.isArray(payload?.students) || payload.students.length !== 6) return cb({ ok: false, error: 'Нужно 6 участников' });
+
+    r.students.forEach((s, i) => {
+      const p = payload.students[i] || {};
+      s.name = String(p.name || s.name).trim().slice(0, 24) || s.name;
+      s.stars = safeStars(p.stars);
+    });
+
+    emitState(roomId);
+    cb({ ok: true });
+  });
+
+  socket.on('lock-distribution', (_, cb = () => {}) => {
+    if (!socket.data.admin) return cb({ ok: false, error: 'Только преподаватель' });
+    const r = getRoom(roomId);
+    if (r.spinning) return cb({ ok: false, error: 'Сейчас идёт вращение' });
+    if (r.history.length) return cb({ ok: false, error: 'Розыгрыш уже начался' });
+    if (r.distributionLocked) return cb({ ok: true });
+
+    lockDistribution(r);
+    emitState(roomId);
+    cb({ ok: true });
+  });
+
+  socket.on('set-current-student', (payload, cb = () => {}) => {
+    if (!socket.data.admin) return cb({ ok: false, error: 'Только преподаватель' });
+    const r = getRoom(roomId);
+    if (!r.distributionLocked) return cb({ ok: false, error: 'Сначала зафиксируй распределение призов' });
+    if (r.spinning) return cb({ ok: false, error: 'Сейчас колесо вращается' });
+    if (r.completed) return cb({ ok: false, error: 'Все призы уже открыты' });
+
+    const s = r.students.find(x => x.id === String(payload?.studentId || ''));
+    if (!s) return cb({ ok: false, error: 'Ученик не найден' });
+    if (s.revealed) return cb({ ok: false, error: `${s.name} уже открыл(а) свой приз` });
+    if (!s.boundUserId) return cb({ ok: false, error: `${s.name} ещё не выбрал(а) себя в приложении` });
+
+    r.currentStudentId = s.id;
+    emitState(roomId);
+    cb({ ok: true, name: s.name });
+  });
+
+  socket.on('spin', (_, cb = () => {}) => {
+    const r = getRoom(roomId);
+    if (!r.distributionLocked) return cb({ ok: false, error: 'Преподаватель ещё не зафиксировал распределение' });
+    if (r.spinning) return cb({ ok: false, error: 'Колесо уже вращается' });
+    if (r.completed) return cb({ ok: false, error: 'Все призы уже открыты' });
+
+    const uid = String(socket.data.user?.id ?? '');
+    const mine = studentForUser(r, uid);
+    if (!mine) return cb({ ok: false, error: 'Сначала выбери своё имя' });
+    if (mine.revealed) return cb({ ok: false, error: 'Ты уже открыл(а) свой приз' });
+    if (r.currentStudentId !== mine.id) {
+      const current = r.students.find(s => s.id === r.currentStudentId);
+      return cb({ ok: false, error: current ? `Сейчас крутит ${current.name}` : 'Преподаватель ещё не назначил, кто крутит' });
+    }
+    if (mine.prizeIndex == null) return cb({ ok: false, error: 'Внутренняя ошибка распределения' });
+
+    const duration = 5200;
+    r.spinning = true;
+    io.to(roomId).emit('spin-start', {
+      duration,
+      studentId: mine.id,
+      studentName: mine.name,
+      prizeIndex: mine.prizeIndex
+    });
+    emitPersonal(roomId);
+    cb({ ok: true });
+
+    setTimeout(() => {
+      mine.revealed = true;
+      r.history.push({ studentId: mine.id, name: mine.name, prizeIndex: mine.prizeIndex });
+      r.currentStudentId = null;
+      r.spinning = false;
+      r.completed = r.students.every(s => s.revealed);
+
+      io.to(roomId).emit('spin-result', {
+        studentId: mine.id,
+        studentName: mine.name,
+        prizeIndex: mine.prizeIndex,
+        prize: PRIZES[mine.prizeIndex],
+        completed: r.completed
+      });
       emitState(roomId);
-      cb({ok:true,name:r.allowedSpinnerName});
-    }).catch(()=>cb({ok:false,error:'Не удалось назначить ход'}));
+    }, duration + 250);
   });
 
-  socket.on('spin',(_,cb=()=>{})=>{
-    const r=getRoom(roomId);
-    const uid=String(socket.data.user?.id ?? '');
-    const allowed=!!socket.data.admin || (!!r.allowedSpinnerUserId && uid===String(r.allowedSpinnerUserId));
-    if(!allowed) return cb({ok:false,error:r.allowedSpinnerName ? `Сейчас крутит ${r.allowedSpinnerName}` : 'Преподаватель ещё не назначил, кто крутит'});
-    if(r.spinning) return cb({ok:false,error:'Уже вращается'}); if(r.completed) return cb({ok:false,error:'Месяц уже завершён'});
-    const list=active(r); if(list.length<2) return cb({ok:false,error:'Недостаточно участников'});
-    const winner=chooseWeighted(r,list);
-    const duration=5200;
-    const participants=list.map(s=>({id:s.id,name:s.name,stars:s.stars,tickets:tickets(r,s)}));
-    const u=socket.data.user||{};
-    const spinnerName=displayName(u);
-    r.spinning=true;
-    r.allowedSpinnerUserId=null;
-    r.allowedSpinnerName=null;
-    io.to(roomId).emit('spin-start',{duration,participants,winnerId:winner.id,level:r.level,spinnerName});
-    emitTurnPermissions(roomId);
-    cb({ok:true});
-    setTimeout(()=>{
-      if(list.length===2){
-        const other=list.find(s=>s.id!==winner.id);
-        r.history.push({level:4,name:winner.name});
-        r.history.push({level:5,name:other.name});
-        winner.active=false; other.active=false; r.completed=true; r.level=6;
-        io.to(roomId).emit('spin-result',{winner:winner.name,finalOther:other.name,final:true});
-      }else{
-        r.history.push({level:r.level,name:winner.name});
-        winner.active=false; r.level+=1;
-        io.to(roomId).emit('spin-result',{winner:winner.name,final:false});
-      }
-      r.spinning=false; emitState(roomId);
-    },duration+300);
+  // Пересчитать скрытое распределение с теми же звёздами. История открытий стирается.
+  socket.on('reset-distribution', (_, cb = () => {}) => {
+    if (!socket.data.admin) return cb({ ok: false, error: 'Только преподаватель' });
+    const r = getRoom(roomId);
+    if (r.spinning) return cb({ ok: false, error: 'Сейчас колесо вращается' });
+
+    r.students.forEach(s => {
+      s.prizeIndex = null;
+      s.revealed = false;
+    });
+    r.distributionLocked = false;
+    r.currentStudentId = null;
+    r.history = [];
+    r.completed = false;
+    emitState(roomId);
+    cb({ ok: true });
   });
 
-  socket.on('reset',(_,cb=()=>{})=>{
-    if(!socket.data.admin) return cb({ok:false,error:'Только преподаватель'});
-    const r=getRoom(roomId); r.students.forEach(s=>s.active=true); r.level=0; r.history=[]; r.spinning=false; r.completed=false; r.allowedSpinnerUserId=null; r.allowedSpinnerName=null; emitState(roomId); cb({ok:true});
+  socket.on('reset-bindings', (_, cb = () => {}) => {
+    if (!socket.data.admin) return cb({ ok: false, error: 'Только преподаватель' });
+    const r = getRoom(roomId);
+    if (r.spinning) return cb({ ok: false, error: 'Сейчас колесо вращается' });
+
+    r.students.forEach(s => {
+      s.boundUserId = null;
+      s.boundUserName = null;
+    });
+    r.currentStudentId = null;
+    emitState(roomId);
+    cb({ ok: true });
   });
 
-  socket.on('new-month',(_,cb=()=>{})=>{
-    if(!socket.data.admin) return cb({ok:false,error:'Только преподаватель'});
-    const old=getRoom(roomId); const nr=freshRoom(); nr.students.forEach((s,i)=>s.name=old.students[i]?.name||s.name); rooms.set(roomId,nr); emitState(roomId); cb({ok:true});
+  socket.on('new-month', (_, cb = () => {}) => {
+    if (!socket.data.admin) return cb({ ok: false, error: 'Только преподаватель' });
+    const old = getRoom(roomId);
+    if (old.spinning) return cb({ ok: false, error: 'Сейчас колесо вращается' });
+
+    const nr = freshRoom();
+    nr.students.forEach((s, i) => {
+      const prev = old.students[i];
+      s.name = prev?.name || s.name;
+      // Сохраняем привязку Telegram к имени на следующий месяц.
+      s.boundUserId = prev?.boundUserId || null;
+      s.boundUserName = prev?.boundUserName || null;
+    });
+    rooms.set(roomId, nr);
+    emitState(roomId);
+    cb({ ok: true });
   });
 
-  socket.on('disconnect',()=>setTimeout(()=>{
-    io.to(roomId).emit('presence',{count:io.sockets.adapter.rooms.get(roomId)?.size||0});
-    emitOnlineUsers(roomId);
-  },80));
+  socket.on('disconnect', () => setTimeout(() => {
+    io.to(roomId).emit('presence', { count: io.sockets.adapter.rooms.get(roomId)?.size || 0 });
+    emitAdminOnline(roomId);
+  }, 80));
 });
 
-app.use(express.static('.'));
-app.get('/health',(req,res)=>res.json({ok:true,rooms:rooms.size}));
-server.listen(PORT,'0.0.0.0',()=>console.log(`Listening on ${PORT}`));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.get('/health', (req, res) => res.json({ ok: true, rooms: rooms.size }));
+
+server.listen(PORT, '0.0.0.0', () => console.log(`Listening on ${PORT}`));
