@@ -8,6 +8,8 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+app.use('/assets', express.static(path.join(__dirname, 'assets')));
+
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const ADMIN_PIN = String(process.env.ADMIN_PIN || '');
