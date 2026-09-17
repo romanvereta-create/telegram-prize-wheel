@@ -59,15 +59,8 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
 .resultCard .small{margin-top:4px}
 .prizeTitle{font-size:26px;font-weight:900;line-height:1.08;color:#17233d}
 .resultHint{font-size:14px;color:#58657f;margin-top:4px}
-.currentPrizeBox{display:grid;grid-template-columns:96px 1fr;gap:14px;align-items:center;background:linear-gradient(135deg,#fffef8,#eef5ff);border:1px solid #e7ecfb;border-radius:18px;padding:12px;margin:10px 0 6px}
-.currentPrizeBox img{width:96px;height:96px;object-fit:contain;border-radius:16px;background:#fff;padding:6px;box-shadow:inset 0 0 0 1px #e2e8f4}
-.currentPrizeBox.hidden{display:none}
-.currentPrizeTitle{font-size:24px;font-weight:900;line-height:1.06}
-.currentPrizeSub{font-size:13px;color:#61708c;margin-bottom:6px}
 .prizeGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .prizeCard{display:grid;grid-template-columns:76px 1fr;gap:10px;align-items:center;border:1px solid #e2e8f4;border-radius:16px;padding:10px;background:#fbfcff}
-.prizeCard.current{outline:3px solid #cfdcff;background:#f4f7ff}
-.prizeCard.revealed{opacity:.65}
 .prizeCard img{width:76px;height:76px;object-fit:contain;border-radius:14px;background:#fff;padding:5px;box-shadow:inset 0 0 0 1px #e2e8f4}
 .prizeCardTitle{font-size:16px;font-weight:900;line-height:1.1}
 .prizeCardDesc{font-size:12px;color:#6f7b91;margin-top:4px}
@@ -78,7 +71,7 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
 @keyframes fall{0%{transform:translate3d(0,-10vh,0) rotate(0deg);opacity:0}10%{opacity:1}100%{transform:translate3d(var(--x),110vh,0) rotate(var(--r));opacity:0}}
 @keyframes pulsePop{0%{transform:scale(.85);opacity:0}60%{transform:scale(1.04);opacity:1}100%{transform:scale(1);opacity:1}}
 .pop{animation:pulsePop .45s ease}
-@media(max-width:620px){.people,.bindList,.prizeGrid{grid-template-columns:1fr}.editor{grid-template-columns:1fr 82px}.chance{grid-column:1/-1;text-align:left}.hero h1{font-size:24px}.resultCard,.resultCard.compact,.currentPrizeBox,.prizeCard{grid-template-columns:1fr;text-align:center}.resultMedia img,.currentPrizeBox img,.prizeCard img{margin:auto}.prizeTitle{font-size:24px}}
+@media(max-width:620px){.people,.bindList,.prizeGrid{grid-template-columns:1fr}.editor{grid-template-columns:1fr 82px}.chance{grid-column:1/-1;text-align:left}.hero h1{font-size:24px}.resultCard,.resultCard.compact,.prizeCard{grid-template-columns:1fr;text-align:center}.resultMedia img,.prizeCard img{margin:auto}.prizeTitle{font-size:24px}}
 </style>
 </head>
 <body>
@@ -99,18 +92,17 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
 
   <section class="card">
     <div class="row"><div><div class="small">Сейчас крутит</div><div class="stage" id="stage">Очередь ещё не определена</div></div><div class="small" id="lockState">Распределение не зафиксировано</div></div>
-    <div class="currentPrizeBox hidden" id="currentPrize"></div>
     <div class="wheelWrap">
       <div class="pointer"></div><canvas id="wheel" width="760" height="760"></canvas><div class="centerDot"></div>
     </div>
     <button class="mainBtn" id="spin" disabled>Ждём назначения хода</button>
     <div class="result" id="result"></div>
-    <div class="small" style="text-align:center;margin-top:6px">Колесо — анимация открытия. Само распределение призов рассчитывает сервер по звёздам и хранит скрыто до вращения.</div>
+    <div class="small" style="text-align:center;margin-top:6px">Колесо открывает личный результат ученика. Его приз уже скрыто определён сервером до начала вращения.</div>
   </section>
 
   <section class="card">
     <h2>Звёзды и стартовый шанс на Суперприз</h2>
-    <div class="notice"><span class="formula">вес = звёзды − минимум + 5</span><div class="small" style="margin-top:5px">Шанс = вес ученика / сумма весов. После назначения Суперприза его обладатель исключается; для следующего приза минимум, веса и доли автоматически пересчитываются среди оставшихся.</div></div>
+    <div class="notice"><span class="formula">вес = звёзды − минимум + 5</span><div class="small" style="margin-top:5px">Суперприз определяется по этим весам. Затем его обладатель исключается, и Большой приз определяется среди оставшихся с новым пересчётом. Для остальных четырёх учеников звёзды повышают шанс на более сильный из повторяемых нижних уровней.</div></div>
     <div class="people" id="people" style="margin-top:10px"></div>
   </section>
 
@@ -121,7 +113,7 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
 
   <section class="card">
     <h2>Уровни призов</h2>
-    <div class="small">Акварельные эмблемы для всех 6 уровней. Подсвечен текущий уровень, который сейчас разыгрывается.</div>
+    <div class="small">Возможные уровни призов. Суперприз и Большой приз бывают только по одному; остальные уровни могут повторяться.</div>
     <div class="prizeGrid" id="prizeGrid" style="margin-top:10px"></div>
   </section>
 
@@ -153,7 +145,7 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
     <div class="buttons"><button class="secondary" id="resetDistribution">Пересчитать распределение</button><button class="danger" id="newMonth">Новый месяц</button></div>
   </section>
 
-  <div class="footer">Вес = звёзды − минимум среди участников + 5. После каждого приза веса пересчитываются среди оставшихся.</div>
+  <div class="footer">Суперприз и Большой приз уникальны. Средний, Малый и бонусы могут повторяться. Звёзды влияют на вероятность более сильного результата.</div>
 </div>
 
 <script>
@@ -173,12 +165,12 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
   const app=$('app'),canvas=$('wheel'),ctx=canvas.getContext('2d');
   const COLORS=['#e7b94e','#6e8ee7','#d48752','#6eb68e','#a679d5','#55a9c8'];
   const PRIZE_META=[
-    {key:'super',title:'Суперприз',emoji:'🥇',img:'/assets/superprize.png',desc:'Главный уровень месяца'},
-    {key:'big',title:'Большой приз',emoji:'🥈',img:'/assets/big_prize.png',desc:'Сильный призовой уровень'},
-    {key:'medium',title:'Средний приз',emoji:'🥉',img:'/assets/medium_prize.png',desc:'Уверенный призовой уровень'},
-    {key:'small',title:'Малый приз',emoji:'🎯',img:'/assets/small_prize.png',desc:'Хороший приз за участие'},
-    {key:'bonusA',title:'Финальный бонус А',emoji:'🎁',img:'/assets/bonus_a.png',desc:'Бонусный уровень'},
-    {key:'bonusB',title:'Финальный бонус Б',emoji:'🎉',img:'/assets/bonus_b.png',desc:'Финальный бонусный уровень'}
+    {key:'super',title:'Суперприз',emoji:'🥇',img:'/assets/superprize.png',desc:'Только один на весь розыгрыш'},
+    {key:'big',title:'Большой приз',emoji:'🥈',img:'/assets/big_prize.png',desc:'Только один на весь розыгрыш'},
+    {key:'medium',title:'Средний приз',emoji:'🥉',img:'/assets/medium_prize.png',desc:'Может повторяться'},
+    {key:'small',title:'Малый приз',emoji:'🎯',img:'/assets/small_prize.png',desc:'Может повторяться'},
+    {key:'bonusA',title:'Финальный бонус А',emoji:'🎁',img:'/assets/bonus_a.png',desc:'Может повторяться'},
+    {key:'bonusB',title:'Финальный бонус Б',emoji:'🎉',img:'/assets/bonus_b.png',desc:'Может повторяться'}
   ];
   let state=null, personal={admin:false,studentId:null,studentName:null,canSpin:false,userName:''};
   let admin=false, anim=false, onlineUsers=[];
@@ -189,19 +181,8 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
 
 
   function prizeMetaByIndex(i){return PRIZE_META[Number(i)]||PRIZE_META[0]}
-  function currentPrizeIndex(){
-    if(!state) return 0;
-    return Math.min(state.history?.length||0, PRIZE_META.length-1);
-  }
-  function currentPrizeMarkup(){
-    if(!state || state.completed) return '';
-    const i=currentPrizeIndex(),meta=prizeMetaByIndex(i);
-    return `<div class="currentPrizeSub">Сейчас разыгрывается</div><img src="${meta.img}" alt="${meta.title}"><div><div class="resultLabel">${meta.emoji} Уровень ${i+1} из 6</div><div class="currentPrizeTitle">${meta.title}</div><div class="resultHint">Сервер уже рассчитал скрытое распределение по звёздам. Ученик крутит только за свой приз.</div></div>`;
-  }
-  function galleryCard(meta,i,extra=''){
-    const current = !state?.completed && i===currentPrizeIndex();
-    const revealed = (state?.history||[]).some(h=>Number(h.prizeIndex)===i);
-    return `<div class="prizeCard ${current?'current':''} ${revealed?'revealed':''}"><img src="${meta.img}" alt="${meta.title}"><div><div class="prizeCardTitle">${meta.emoji} ${meta.title}</div><div class="prizeCardDesc">${extra || meta.desc}</div></div></div>`;
+  function galleryCard(meta,i){
+    return `<div class="prizeCard"><img src="${meta.img}" alt="${meta.title}"><div><div class="prizeCardTitle">${meta.emoji} ${meta.title}</div><div class="prizeCardDesc">${meta.desc}</div></div></div>`;
   }
   function renderPrizeGrid(){
     $('prizeGrid').innerHTML = PRIZE_META.map((m,i)=>galleryCard(m,i)).join('');
@@ -271,8 +252,6 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
     const current=state.students.find(s=>s.id===state.currentStudentId);
     $('stage').textContent=state.completed?'🎉 Все призы открыты':(current?current.name:'Очередь ещё не определена');
     $('lockState').textContent=state.distributionLocked?'🔒 распределение зафиксировано':'распределение не зафиксировано';
-    const cp=$('currentPrize');
-    if(state.completed){cp.classList.add('hidden');cp.innerHTML='';}else{cp.classList.remove('hidden');cp.innerHTML=currentPrizeMarkup();}
 
     if(state.completed){
       $('spin').disabled=true;$('spin').textContent='Все призы открыты';
@@ -356,7 +335,7 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
     canvas.style.transition=`transform ${d.duration}ms cubic-bezier(.12,.72,.16,1)`;
     canvas.style.transform=`rotate(${deg}deg)`;
     $('spin').disabled=true;
-    $('result').innerHTML=resultMarkup(d.studentName,d.prizeIndex,'Крутит за свой приз');
+    $('result').innerHTML=`<div class="notice"><b>${esc(d.studentName)}</b> крутит за свой приз…</div>`;
   });
 
   socket.on('spin-result',d=>{

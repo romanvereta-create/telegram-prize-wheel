@@ -8,8 +8,6 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use('/assets', express.static(path.join(__dirname, 'assets')));
-
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const ADMIN_PIN = String(process.env.ADMIN_PIN || '');
@@ -144,9 +142,39 @@ function chooseWeightedStudent(candidates) {
   return candidates[candidates.length - 1];
 }
 
-// Призы распределяются в порядке ценности. На каждом уровне:
-// weight_i = stars_i - minStarsAmongRemaining + 5.
-// Победитель уровня исключается, минимум и веса пересчитываются среди оставшихся.
+// Для четырёх нижних уровней повторы разрешены.
+// Чем больше звёзд у ученика относительно остальных оставшихся,
+// тем сильнее его распределение смещено к Среднему и Малому призу.
+// t = 0 у ученика с минимумом звёзд, t = 1 у ученика с максимумом.
+// Вероятности [Средний, Малый, Бонус А, Бонус Б]:
+// при t=0 -> [25%, 30%, 25%, 20%]
+// при t=1 -> [40%, 35%, 20%, 5%]
+function chooseLowerPrizeIndex(student, candidates) {
+  const stars = candidates.map(s => safeStars(s.stars));
+  const minStars = Math.min(...stars);
+  const maxStars = Math.max(...stars);
+  const t = maxStars === minStars
+    ? 0.5
+    : (safeStars(student.stars) - minStars) / (maxStars - minStars);
+
+  const probs = [
+    25 + 15 * t,
+    30 + 5 * t,
+    25 - 5 * t,
+    20 - 15 * t
+  ];
+
+  // 10000 долей дают стабильную точность без float в crypto.randomInt.
+  const weights = probs.map(p => Math.max(1, Math.round(p * 100)));
+  const total = weights.reduce((a, b) => a + b, 0);
+  let x = crypto.randomInt(total);
+  for (let i = 0; i < weights.length; i += 1) {
+    x -= weights[i];
+    if (x < 0) return i + 2; // индексы 2..5 в PRIZES
+  }
+  return 5;
+}
+
 function nextStudentByStars(r) {
   return r.students
     .map((s, i) => ({ s, i }))
@@ -154,14 +182,32 @@ function nextStudentByStars(r) {
     .sort((a, b) => safeStars(b.s.stars) - safeStars(a.s.stars) || a.i - b.i)[0]?.s || null;
 }
 
+// Скрытое распределение фиксируется один раз до начала вращений.
+// 1) Суперприз — ровно один: выбор по weight = stars - min + 5.
+// 2) Большой приз — ровно один среди оставшихся: те же веса пересчитываются.
+// 3) Остальные четыре ученика получают один из четырёх нижних уровней;
+//    эти уровни могут повторяться, а звёзды смещают шанс к более сильным призам.
 function lockDistribution(r) {
   if (r.distributionLocked) return;
+
+  r.students.forEach(s => {
+    s.prizeIndex = null;
+    s.revealed = false;
+  });
+
   const remaining = [...r.students];
 
-  for (let prizeIndex = 0; prizeIndex < PRIZES.length; prizeIndex += 1) {
-    const winner = chooseWeightedStudent(remaining);
-    winner.prizeIndex = prizeIndex;
-    remaining.splice(remaining.findIndex(s => s.id === winner.id), 1);
+  const superWinner = chooseWeightedStudent(remaining);
+  superWinner.prizeIndex = 0;
+  remaining.splice(remaining.findIndex(s => s.id === superWinner.id), 1);
+
+  const bigWinner = chooseWeightedStudent(remaining);
+  bigWinner.prizeIndex = 1;
+  remaining.splice(remaining.findIndex(s => s.id === bigWinner.id), 1);
+
+  const lowerCandidates = [...remaining];
+  for (const s of lowerCandidates) {
+    s.prizeIndex = chooseLowerPrizeIndex(s, lowerCandidates);
   }
 
   r.distributionLocked = true;
