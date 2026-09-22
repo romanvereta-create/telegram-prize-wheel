@@ -85,7 +85,7 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
 
   <section class="card" id="identityCard">
     <h2>Кто ты?</h2>
-    <div class="small">Ученику нужно один раз выбрать своё имя. Преподавателю выбирать имя не нужно — войди по PIN ниже.</div>
+    <div class="small">Ученику нужно один раз выбрать своё имя. Если ты только наблюдаешь — выбери «Гость». Преподавателю выбирать имя не нужно — войди по PIN ниже.</div>
     <div class="buttons" id="claimButtons" style="margin-top:10px"></div>
     <div class="notice good" id="meBox" style="display:none;margin-top:10px"></div>
   </section>
@@ -137,12 +137,14 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
   <section class="card adminOnly">
     <h2>Привязки Telegram</h2>
     <div class="bindList" id="bindings"></div>
+    <div class="notice" id="guestOnline" style="margin-top:10px">👀 Гостей онлайн: 0</div>
     <div class="buttons" style="margin-top:10px"><button class="secondary" id="resetBindings">Сбросить привязки имён</button></div>
   </section>
 
   <section class="card adminOnly">
     <h2>Сервис</h2>
-    <div class="buttons"><button class="secondary" id="resetDistribution">Пересчитать распределение</button><button class="danger" id="newMonth">Новый месяц</button></div>
+    <div class="buttons"><button class="secondary" id="demoSpin">🎡 Демо-вращение для зрителей</button><button class="secondary" id="resetDistribution">Пересчитать распределение</button><button class="danger" id="newMonth">Новый месяц</button></div>
+    <div class="small" style="margin-top:8px">Демо-вращение увидят все, кто сейчас открыл приложение в этой группе, включая гостей. Оно ничего не меняет в распределении призов.</div>
   </section>
 
   <div class="footer">Суперприз и Большой приз уникальны. Средний, Малый и бонусы могут повторяться. Звёзды влияют на вероятность более сильного результата.</div>
@@ -172,7 +174,7 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
     {key:'bonusA',title:'Финальный бонус А',emoji:'🎁',img:'/assets/bonus_a.png',desc:'Может повторяться'},
     {key:'bonusB',title:'Финальный бонус Б',emoji:'🎉',img:'/assets/bonus_b.png',desc:'Может повторяться'}
   ];
-  let state=null, personal={admin:false,studentId:null,studentName:null,canSpin:false,userName:''};
+  let state=null, personal={admin:false,studentId:null,studentName:null,guest:false,canSpin:false,userName:''};
   let admin=false, anim=false, onlineUsers=[];
 
   function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]))}
@@ -236,21 +238,29 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
     if(personal.studentId){
       box.innerHTML='';
       me.style.display='block';
-      const s=state.students.find(x=>x.id===personal.studentId);
-      me.innerHTML=`Ты выбрал(а): <b>${esc(personal.studentName)}</b>${s?` · ${s.stars} ⭐`:''}`;
+      const st=state.students.find(x=>x.id===personal.studentId);
+      me.innerHTML=`Ты выбрал(а): <b>${esc(personal.studentName)}</b>${st?` · ${st.stars} ⭐`:''}`;
+      return;
+    }
+    if(personal.guest){
+      box.innerHTML='';
+      me.style.display='block';
+      me.innerHTML=`👀 Ты вошёл(ла) как <b>гость</b>. Можно наблюдать за колесом в реальном времени. <button class="secondary" id="leaveGuest" style="margin-left:8px;padding:6px 9px">Выбрать ученика</button>`;
+      $('leaveGuest').onclick=()=>socket.emit('leave-guest',{},r=>{if(!r.ok)error(r.error)});
       return;
     }
     me.style.display='none';
-    box.innerHTML=state.students.map(s=>`<button class="studentBtn" data-id="${s.id}" ${s.bound?'disabled':''}>${esc(s.name)}${s.bound?' · занято':''}</button>`).join('');
-    box.querySelectorAll('.studentBtn:not([disabled])').forEach(btn=>btn.onclick=()=>{
+    box.innerHTML=state.students.map(st=>`<button class="studentBtn" data-id="${st.id}" ${st.bound?'disabled':''}>${esc(st.name)}${st.bound?' · занято':''}</button>`).join('')+`<button class="studentBtn" id="guestBtn">👀 Гость</button>`;
+    box.querySelectorAll('.studentBtn[data-id]:not([disabled])').forEach(btn=>btn.onclick=()=>{
       socket.emit('claim-student',{studentId:btn.dataset.id},r=>{if(!r.ok)error(r.error)});
     });
+    $('guestBtn').onclick=()=>socket.emit('choose-guest',{},r=>{if(!r.ok)error(r.error)});
   }
 
   function render(){
     if(!state)return;
     const current=state.students.find(s=>s.id===state.currentStudentId);
-    $('stage').textContent=state.completed?'🎉 Все призы открыты':(current?current.name:'Очередь ещё не определена');
+    $('stage').textContent=state.demoSpinning?'🎡 Демо-вращение':(state.completed?'🎉 Все призы открыты':(current?current.name:'Очередь ещё не определена'));
     $('lockState').textContent=state.distributionLocked?'🔒 распределение зафиксировано':'распределение не зафиксировано';
 
     if(state.completed){
@@ -259,7 +269,8 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
       $('spin').disabled=!!state.spinning;$('spin').textContent='🎡 Крутить за свой приз';
     }else{
       $('spin').disabled=true;
-      if(!personal.studentId) $('spin').textContent='Сначала выбери своё имя';
+      if(personal.guest) $('spin').textContent='👀 Режим гостя — наблюдение';
+      else if(!personal.studentId) $('spin').textContent='Сначала выбери своё имя или «Гость»';
       else if(!state.distributionLocked) $('spin').textContent='Ждём фиксации распределения';
       else if(current) $('spin').textContent=`Ждём: ${current.name}`;
       else $('spin').textContent='Ждём очереди';
@@ -283,6 +294,9 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
       $('lockDistribution').textContent=state.distributionLocked?'✓ Распределение зафиксировано':'Зафиксировать распределение';
 
       $('bindings').innerHTML=state.students.map(s=>`<div class="bind"><b>${esc(s.name)}</b><div class="small">${s.bound?(esc(s.boundName)||'Telegram-аккаунт'):'ещё не выбрал(а) себя'}</div></div>`).join('');
+      const guests=onlineUsers.filter(u=>u.guest);
+      $('guestOnline').textContent=guests.length?`👀 Гостей онлайн: ${guests.length} · ${guests.map(g=>g.name).join(', ')}`:'👀 Гостей онлайн: 0';
+      $('demoSpin').disabled=!!state.spinning;
     }
   }
 
@@ -312,6 +326,11 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
     socket.emit('spin',{},r=>{if(!r.ok){error(r.error);render()}});
   };
 
+  $('demoSpin').onclick=()=>{
+    $('demoSpin').disabled=true;
+    socket.emit('demo-spin',{},r=>{if(!r.ok){error(r.error);render()}});
+  };
+
   $('resetDistribution').onclick=()=>{
     if(!confirm('Стереть открытые результаты и скрытое распределение, сохранив звёзды? После этого нужно снова зафиксировать распределение.'))return;
     socket.emit('reset-distribution',{},r=>{if(!r.ok)error(r.error)});
@@ -326,6 +345,23 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
     if(!confirm('Начать новый месяц? Звёзды и результаты обнулятся. Привязки Telegram к ученикам сохранятся.'))return;
     socket.emit('new-month',{},r=>{if(!r.ok)error(r.error)});
   };
+
+  socket.on('demo-spin-start',d=>{
+    anim=true;personal.canSpin=false;
+    canvas.style.transition='none';canvas.style.transform='rotate(0deg)';drawWheel();void canvas.offsetWidth;
+    const point=(Number(d.targetIndex)+0.5)*60;
+    const deg=360*6-point;
+    canvas.style.transition=`transform ${d.duration}ms cubic-bezier(.12,.72,.16,1)`;
+    canvas.style.transform=`rotate(${deg}deg)`;
+    $('spin').disabled=true;
+    $('result').innerHTML='<div class="notice warn"><b>🎡 Демо-вращение</b><br><span class="small">Проверка синхронизации: это вращение видят все подключённые зрители. Результат не засчитывается.</span></div>';
+  });
+
+  socket.on('demo-spin-end',()=>{
+    anim=false;personal.canSpin=false;
+    $('result').innerHTML='<div class="notice good"><b>✓ Демо завершено</b><br><span class="small">Если гость видел вращение одновременно с тобой — синхронизация работает.</span></div>';
+    setTimeout(render,120);
+  });
 
   socket.on('spin-start',d=>{
     anim=true;personal.canSpin=false;

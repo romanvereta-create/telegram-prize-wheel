@@ -19,8 +19,8 @@ const PRIZES = [
   '🥈 Большой приз',
   '🥉 Средний приз',
   '🎮 Малый приз',
-  '🎁 Финальный бонус A',
-  '🎉 Финальный бонус B'
+  '🎁 Финальный бонус А',
+  '🎉 Финальный бонус Б'
 ];
 
 const rooms = new Map();
@@ -39,6 +39,7 @@ function freshRoom() {
     distributionLocked: false,
     currentStudentId: null,
     spinning: false,
+    demoSpinning: false,
     history: [],
     completed: false
   };
@@ -89,6 +90,7 @@ function publicState(r) {
     currentStudentId: r.currentStudentId,
     currentStudentName: current?.name || null,
     spinning: r.spinning,
+    demoSpinning: !!r.demoSpinning,
     history: r.history,
     completed: r.completed
   };
@@ -239,6 +241,7 @@ async function emitPersonal(roomId) {
       userName: displayName(sk.data.user),
       studentId: mine?.id || null,
       studentName: mine?.name || null,
+      guest: !!sk.data.guest,
       canSpin
     });
   }
@@ -247,24 +250,23 @@ async function emitPersonal(roomId) {
 async function emitAdminOnline(roomId) {
   const r = getRoom(roomId);
   const sockets = await io.in(roomId).fetchSockets();
-  const seen = new Map();
 
-  for (const sk of sockets) {
+  const list = sockets.map(sk => {
     const u = sk.data.user || {};
     const uid = String(u.id ?? sk.id);
-    if (!seen.has(uid)) {
-      const mine = studentForUser(r, uid);
-      seen.set(uid, {
-        userId: uid,
-        name: displayName(u),
-        username: u.username || '',
-        studentId: mine?.id || null,
-        studentName: mine?.name || null
-      });
-    }
-  }
+    const mine = studentForUser(r, uid);
+    return {
+      socketId: sk.id,
+      userId: uid,
+      name: displayName(u),
+      username: u.username || '',
+      studentId: mine?.id || null,
+      studentName: mine?.name || null,
+      guest: !!sk.data.guest,
+      admin: !!sk.data.admin
+    };
+  });
 
-  const list = [...seen.values()];
   for (const sk of sockets) {
     if (sk.data.admin) sk.emit('online-users', list);
   }
@@ -299,6 +301,7 @@ io.on('connection', socket => {
   const roomId = socket.data.roomId;
   if (socket.data.user && socket.data.user.id == null) socket.data.user.id = `anon-${socket.id}`;
   socket.data.admin = false;
+  socket.data.guest = false;
   socket.join(roomId);
 
   emitState(roomId);
@@ -329,8 +332,28 @@ io.on('connection', socket => {
 
     s.boundUserId = uid;
     s.boundUserName = displayName(socket.data.user);
+    socket.data.guest = false;
     emitState(roomId);
     cb({ ok: true, studentId: s.id, studentName: s.name });
+  });
+
+
+  socket.on('choose-guest', (_, cb = () => {}) => {
+    const r = getRoom(roomId);
+    const uid = String(socket.data.user?.id ?? '');
+    const existing = studentForUser(r, uid);
+    if (existing) return cb({ ok: false, error: `Этот Telegram-аккаунт уже привязан к ученику ${existing.name}` });
+    socket.data.guest = true;
+    emitPersonal(roomId);
+    emitAdminOnline(roomId);
+    cb({ ok: true });
+  });
+
+  socket.on('leave-guest', (_, cb = () => {}) => {
+    socket.data.guest = false;
+    emitPersonal(roomId);
+    emitAdminOnline(roomId);
+    cb({ ok: true });
   });
 
   socket.on('save-stars', (payload, cb = () => {}) => {
@@ -397,6 +420,7 @@ io.on('connection', socket => {
 
     const duration = 5200;
     r.spinning = true;
+    r.demoSpinning = false;
     io.to(roomId).emit('spin-start', {
       duration,
       studentId: mine.id,
@@ -424,6 +448,32 @@ io.on('connection', socket => {
     }, duration + 250);
   });
 
+
+  // Демонстрационное вращение: синхронно показывается всем участникам комнаты,
+  // но не меняет скрытое распределение, историю и ничей приз.
+  socket.on('demo-spin', (_, cb = () => {}) => {
+    if (!socket.data.admin) return cb({ ok: false, error: 'Только преподаватель' });
+    const r = getRoom(roomId);
+    if (r.spinning) return cb({ ok: false, error: 'Колесо уже вращается' });
+
+    const duration = 4300;
+    const targetIndex = crypto.randomInt(PRIZES.length);
+    r.spinning = true;
+    r.demoSpinning = true;
+
+    io.to(roomId).emit('demo-spin-start', { duration, targetIndex });
+    emitState(roomId);
+    cb({ ok: true });
+
+    setTimeout(() => {
+      const currentRoom = getRoom(roomId);
+      currentRoom.spinning = false;
+      currentRoom.demoSpinning = false;
+      io.to(roomId).emit('demo-spin-end', { targetIndex });
+      emitState(roomId);
+    }, duration + 250);
+  });
+
   // Пересчитать скрытое распределение с теми же звёздами. История открытий стирается.
   socket.on('reset-distribution', (_, cb = () => {}) => {
     if (!socket.data.admin) return cb({ ok: false, error: 'Только преподаватель' });
@@ -436,6 +486,7 @@ io.on('connection', socket => {
     });
     r.distributionLocked = false;
     r.currentStudentId = null;
+    r.demoSpinning = false;
     r.history = [];
     r.completed = false;
     emitState(roomId);
@@ -480,6 +531,7 @@ io.on('connection', socket => {
   }, 80));
 });
 
+app.use('/assets', express.static(path.join(__dirname, 'assets')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/health', (req, res) => res.json({ ok: true, rooms: rooms.size }));
 
