@@ -251,13 +251,10 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
     // Крупные акварельные эмблемы прямо на колесе. Фон у PNG прозрачный.
     PRIZE_META.forEach((meta,i)=>{
       const m=-Math.PI/2+span*(i+.5);
-      const iconRadius=210;
-      const labelRadius=285;
+      const iconRadius=214;
       const cx=380+Math.cos(m)*iconRadius;
       const cy=380+Math.sin(m)*iconRadius;
-      const lx=380+Math.cos(m)*labelRadius;
-      const ly=380+Math.sin(m)*labelRadius;
-      const box=170;
+      const box=205;
 
       ctx.save();
       const img=PRIZE_IMAGES[i];
@@ -277,34 +274,6 @@ canvas{display:block;width:100%;height:auto;border-radius:50%}
         ctx.fill();
       }
 
-      // Контрастная подпись в тёмной плашке.
-      const words=meta.title.split(' ');
-      const lines = words.length<=2 ? [meta.title] : [words.slice(0,-1).join(' '), words.slice(-1).join(' ')];
-      const maxWidth=200;
-      const lineHeight=26;
-      const padX=16;
-      const padY=10;
-      ctx.font='900 22px Arial';
-      const widths=lines.map(line=>ctx.measureText(line).width);
-      const bubbleW=Math.min(maxWidth, Math.max(...widths)+padX*2);
-      const bubbleH=lines.length*lineHeight+padY*2;
-      ctx.fillStyle='rgba(18,31,55,.84)';
-      ctx.shadowColor='rgba(18,31,55,.18)';
-      ctx.shadowBlur=8;
-      ctx.shadowOffsetY=3;
-      roundRectPath(lx-bubbleW/2,ly-bubbleH/2,bubbleW,bubbleH,18);
-      ctx.fill();
-      ctx.shadowColor='transparent';
-      ctx.textAlign='center';
-      ctx.textBaseline='middle';
-      ctx.fillStyle='#ffffff';
-      ctx.strokeStyle='rgba(8,14,28,.78)';
-      ctx.lineWidth=5;
-      lines.forEach((line,idx)=>{
-        const yy=ly + (idx-(lines.length-1)/2)*lineHeight;
-        ctx.strokeText(line,lx,yy);
-        ctx.fillText(line,lx,yy);
-      });
       ctx.restore();
     });
 
